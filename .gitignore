@@ -1,0 +1,7 @@
+"myvenv/" | Out-File .gitignore -Encoding utf8
+"__pycache__/" | Add-Content .gitignore
+"*.pyc" | Add-Content .gitignore
+".env" | Add-Content .gitignore
+".venv/" | Add-Content .gitignore
+"env/" | Add-Content .gitignore
+"venv/" | Add-Content .gitignore
