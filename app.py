@@ -328,10 +328,9 @@ def render_timeline_with_eras(df_ts, selected_presidents):
                         line_width=0,
                     )
                     # Add era label at top
-                    max_value = filtered["value"].max() if not filtered.empty else 100
                     fig.add_annotation(
                         x=(start + end) / 2,
-                        y=max_value * 1.1,
+                        y=filtered["value"].max() * 1.1,
                         text=president,
                         showarrow=False,
                         font=dict(size=10, color=COLORS[president]),
@@ -727,9 +726,9 @@ def main():
         df_score = load_scorecard()
         df_pillar_scores = load_pillar_scores()
 
-    if df_avg.empty or df_meta.empty:
-        st.error("Data not found. Run the ETL script first and ensure the Supabase tables/views exist.")
-        st.stop()
+        if df_avg.empty or df_meta.empty:
+            st.error("Data not found. Run the ETL script first and ensure the Supabase tables/views exist.")
+            st.stop()
 
     if page in ["Overview", "Time Series"] and df_ts.empty:
         st.error("No timeseries data found. Run the ETL script first and ensure the timeseries table exists.")
