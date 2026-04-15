@@ -12,7 +12,49 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-load_dotenv()
+
+def get_config() -> dict:
+    """Get config from Streamlit secrets (Cloud) or local .env."""
+    config = {}
+    required_keys = ["GEMINI_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+
+    use_streamlit_secrets = False
+    try:
+        if all(key in st.secrets for key in required_keys):
+            use_streamlit_secrets = True
+    except Exception:
+        use_streamlit_secrets = False
+
+    if use_streamlit_secrets:
+        config["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+        config["SUPABASE_URL"] = st.secrets["SUPABASE_URL"]
+        config["SUPABASE_KEY"] = st.secrets["SUPABASE_KEY"]
+        try:
+            st.sidebar.success("✅ Using Streamlit Cloud secrets")
+        except Exception:
+            pass
+    else:
+        load_dotenv()
+        config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY")
+        config["SUPABASE_URL"] = os.environ.get("SUPABASE_URL")
+        config["SUPABASE_KEY"] = os.environ.get("SUPABASE_KEY")
+        try:
+            st.sidebar.info("ℹ️ Using local .env file")
+        except Exception:
+            pass
+
+    missing = [key for key, value in config.items() if not value]
+    if missing:
+        raise RuntimeError(
+            f"Missing required configuration values: {', '.join(missing)}"
+        )
+
+    return config
+
+CONFIG = get_config()
+GEMINI_API_KEY = CONFIG["GEMINI_API_KEY"]
+SUPABASE_URL = CONFIG["SUPABASE_URL"]
+SUPABASE_KEY = CONFIG["SUPABASE_KEY"]
 
 # Page config 
 st.set_page_config(
@@ -61,7 +103,7 @@ KEY_INDICATORS = {
 # Supabase client 
 @st.cache_resource
 def get_supabase() -> Client:
-    return create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 #  Data loaders (cached) 
 @st.cache_data(ttl=3600)
@@ -118,10 +160,7 @@ def load_pillar_scores() -> pd.DataFrame:
 #  Gemini chatbot 
 @st.cache_resource
 def get_gemini():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not found in environment")
-    genai.configure(api_key=api_key)
+    genai.configure(api_key=GEMINI_API_KEY)
     return genai.GenerativeModel("gemini-2.5-flash")
 
 def build_data_context(df_avg: pd.DataFrame, df_meta: pd.DataFrame) -> str:
