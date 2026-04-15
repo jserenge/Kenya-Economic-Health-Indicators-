@@ -1,9 +1,6 @@
-"""
-Kenya Presidential Economic Dashboard - Enhanced Interactive Version
-"""
+"""Kenya Presidential Economic Dashboard"""
+
 import os
-import re
-import json
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -13,58 +10,39 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 
 
+# ── Configuration ──────────────────────────────────────────────────────────────
+
 def get_config() -> dict:
-    """Get config from Streamlit secrets (Cloud) or local .env."""
+    """Load config from Streamlit secrets (Cloud) or local .env."""
     config = {}
     required_keys = ["GEMINI_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
 
     use_streamlit_secrets = False
     try:
-        if all(key in st.secrets for key in required_keys):
+        if all(k in st.secrets for k in required_keys):
             use_streamlit_secrets = True
     except Exception:
-        use_streamlit_secrets = False
+        pass
 
     if use_streamlit_secrets:
-        config["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
-        config["SUPABASE_URL"] = st.secrets["SUPABASE_URL"]
-        config["SUPABASE_KEY"] = st.secrets["SUPABASE_KEY"]
-        try:
-            st.sidebar.success("✅ Using Streamlit Cloud secrets")
-        except Exception:
-            pass
+        for k in required_keys:
+            config[k] = st.secrets[k]
+        st.sidebar.success("✅ Using Streamlit Cloud secrets")
     else:
         load_dotenv()
-        config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY")
-        config["SUPABASE_URL"] = os.environ.get("SUPABASE_URL")
-        config["SUPABASE_KEY"] = os.environ.get("SUPABASE_KEY")
-        try:
-            st.sidebar.info("ℹ️ Using local .env file")
-        except Exception:
-            pass
+        for k in required_keys:
+            config[k] = os.environ.get(k)
+        st.sidebar.info("ℹ️ Using local .env file")
 
-    missing = [key for key, value in config.items() if not value]
+    missing = [k for k, v in config.items() if not v]
     if missing:
-        raise RuntimeError(
-            f"Missing required configuration values: {', '.join(missing)}"
-        )
+        raise RuntimeError(f"Missing required config values: {', '.join(missing)}")
 
     return config
 
-CONFIG = get_config()
-GEMINI_API_KEY = CONFIG["GEMINI_API_KEY"]
-SUPABASE_URL = CONFIG["SUPABASE_URL"]
-SUPABASE_KEY = CONFIG["SUPABASE_KEY"]
 
-# Page config 
-st.set_page_config(
-    page_title="Kenya Presidential Dashboard",
-    page_icon="🇰🇪",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# ── Constants ──────────────────────────────────────────────────────────────────
 
-#  Colors for the different presidents 
 COLORS = {
     "Moi":      "#534AB7",
     "Kibaki":   "#1D9E75",
@@ -72,17 +50,24 @@ COLORS = {
     "Ruto":     "#378ADD",
 }
 
-PILLARS = ["Growth", "Stability", "External Balance", "Inclusion", "Sustainability"]
-
-# Presidential eras for reference
-PRESIDENTIAL_ERAS = {
-    "Moi": (1998, 2002),
-    "Kibaki": (2003, 2013),
-    "Kenyatta": (2013, 2022),
-    "Ruto": (2022, 2024)
+# rgba() equivalents for each president — safe in both light and dark mode
+COLORS_RGBA = {
+    "Moi":      (83,  74,  183),
+    "Kibaki":   (29,  158, 117),
+    "Kenyatta": (216, 90,  48),
+    "Ruto":     (55,  138, 221),
 }
 
-# Indicators where lower value = better performance
+PILLARS = ["Growth", "Stability", "External Balance", "Inclusion", "Sustainability"]
+
+PRESIDENTIAL_ERAS = {
+    "Moi":      (1998, 2002),
+    "Kibaki":   (2003, 2013),
+    "Kenyatta": (2013, 2022),
+    "Ruto":     (2022, 2024),
+}
+
+# FIX 2: indicators where lower value = better performance
 INVERT_FOR_SCORE = {
     "FP.CPI.TOTL.ZG", "NY.GDP.DEFL.KD.ZG",
     "GC.DOD.TOTL.GD.ZS", "DT.DOD.DECT.GD.ZS",
@@ -90,22 +75,31 @@ INVERT_FOR_SCORE = {
     "SI.POV.GINI", "NE.IMP.GNFS.ZS", "FR.INR.LNDP",
 }
 
-# Key indicators for quick view
 KEY_INDICATORS = {
-    "Real GDP growth (%)":          "NY.GDP.MKTP.KD.ZG",
-    "Inflation (%)":                "FP.CPI.TOTL.ZG",
-    "Public debt (% GDP)":          "GC.DOD.TOTL.GD.ZS",
-    "Unemployment (%)":             "SL.UEM.TOTL.ZS",
-    "Life expectancy (yrs)":        "SP.DYN.LE00.IN",
-    "Access to electricity (%)":    "EG.ELC.ACCS.ZS",
+    "Real GDP growth (%)":       "NY.GDP.MKTP.KD.ZG",
+    "Inflation (%)":             "FP.CPI.TOTL.ZG",
+    "Public debt (% GDP)":       "GC.DOD.TOTL.GD.ZS",
+    "Unemployment (%)":          "SL.UEM.TOTL.ZS",
+    "Life expectancy (yrs)":     "SP.DYN.LE00.IN",
+    "Access to electricity (%)": "EG.ELC.ACCS.ZS",
 }
 
-# Supabase client 
+# FIX 2: which display names are "lower is better"
+LOWER_IS_BETTER_LABELS = {"Inflation (%)", "Public debt (% GDP)", "Unemployment (%)"}
+
+PRESIDENT_ORDER = ["Moi", "Kibaki", "Kenyatta", "Ruto"]
+
+
+# ── Supabase client ────────────────────────────────────────────────────────────
+
 @st.cache_resource
 def get_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    cfg = get_config()
+    return create_client(cfg["SUPABASE_URL"], cfg["SUPABASE_KEY"])
 
-#  Data loaders (cached) 
+
+# ── Data loaders (cached) ──────────────────────────────────────────────────────
+
 @st.cache_data(ttl=3600)
 def load_timeseries() -> pd.DataFrame:
     sb = get_supabase()
@@ -116,11 +110,13 @@ def load_timeseries() -> pd.DataFrame:
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df
 
+
 @st.cache_data(ttl=3600)
 def load_averages() -> pd.DataFrame:
     sb = get_supabase()
     rows = sb.table("president_averages").select("*").execute().data
     return pd.DataFrame(rows)
+
 
 @st.cache_data(ttl=3600)
 def load_meta() -> pd.DataFrame:
@@ -128,43 +124,81 @@ def load_meta() -> pd.DataFrame:
     rows = sb.table("indicator_meta").select("*").execute().data
     return pd.DataFrame(rows)
 
+
 @st.cache_data(ttl=3600)
 def load_scorecard() -> pd.DataFrame:
     sb = get_supabase()
     rows = sb.table("scorecard").select("*").execute().data
     return pd.DataFrame(rows)
 
+
 @st.cache_data(ttl=3600)
 def load_pillar_scores() -> pd.DataFrame:
-    """Calculate pillar scores for health meters"""
+    """Compute pillar scores (0–100, higher = better)."""
     df_score = load_scorecard()
     if df_score.empty:
         return pd.DataFrame()
 
-    # Invert negative indicators
     df_score = df_score.copy()
-    df_score.loc[df_score["indicator"].isin(INVERT_FOR_SCORE), "score_raw"] = (
-        100 - pd.to_numeric(df_score.loc[df_score["indicator"].isin(INVERT_FOR_SCORE), "score_raw"], errors="coerce")
-    )
+    df_score["score_raw"] = pd.to_numeric(df_score["score_raw"], errors="coerce")
+    mask = df_score["indicator"].isin(INVERT_FOR_SCORE)
+    df_score.loc[mask, "score_raw"] = 100 - df_score.loc[mask, "score_raw"]
 
-    # Average by pillar and president
-    pillar_scores = (
-        df_score.groupby(["president", "pillar"])["score_raw"]
+    return (
+        df_score
+        .groupby(["president", "pillar"])["score_raw"]
         .mean()
         .reset_index()
         .rename(columns={"score_raw": "score"})
     )
 
-    return pillar_scores
 
-#  Gemini chatbot 
+# ── FIX 6: load all data once, store in session state ─────────────────────────
+
+def ensure_data_loaded():
+    """Load all tables exactly once per session; show spinner only on first load."""
+    if "app_data" not in st.session_state:
+        with st.spinner("Loading data from Supabase…"):
+            ts    = load_timeseries()
+            avg   = load_averages()
+            meta  = load_meta()
+            score = load_scorecard()
+            pillar = load_pillar_scores()
+
+        if avg.empty or meta.empty:
+            st.error("Data not found. Run the ETL script first and ensure Supabase tables exist.")
+            st.stop()
+
+        st.session_state["app_data"] = {
+            "ts":     ts,
+            "avg":    avg,
+            "meta":   meta,
+            "score":  score,
+            "pillar": pillar,
+        }
+
+
+def get_data() -> dict:
+    return st.session_state["app_data"]
+
+
+# ── FIX 5: single source of truth for selected presidents ─────────────────────
+
+def init_president_state():
+    if "selected_presidents" not in st.session_state:
+        st.session_state["selected_presidents"] = list(PRESIDENT_ORDER)
+
+
+# ── Gemini chatbot ─────────────────────────────────────────────────────────────
+
 @st.cache_resource
 def get_gemini():
-    genai.configure(api_key=GEMINI_API_KEY)
+    cfg = get_config()
+    genai.configure(api_key=cfg["GEMINI_API_KEY"])
     return genai.GenerativeModel("gemini-2.5-flash")
 
+
 def build_data_context(df_avg: pd.DataFrame, df_meta: pd.DataFrame) -> str:
-    """Build a concise data summary to inject into Gemini's context."""
     if df_avg.empty or df_meta.empty:
         return "No data available."
     merged = df_avg.merge(df_meta[["indicator", "name", "unit"]], on="indicator", how="left")
@@ -172,19 +206,23 @@ def build_data_context(df_avg: pd.DataFrame, df_meta: pd.DataFrame) -> str:
     for pillar in PILLARS:
         lines.append(f"\n=== {pillar} ===")
         sub = merged[merged["pillar"] == pillar]
-        for _, row in sub.iterrows():
-            for president in ["Moi", "Kibaki", "Kenyatta", "Ruto"]:
-                p_row = sub[(sub["indicator"] == row["indicator"]) & (sub["president"] == president)]
+        for ind in sub["indicator"].unique():
+            ind_rows = sub[sub["indicator"] == ind]
+            ind_name = ind_rows.iloc[0]["name"] if not ind_rows.empty else ind
+            ind_unit = ind_rows.iloc[0]["unit"] if not ind_rows.empty else ""
+            for president in PRESIDENT_ORDER:
+                p_row = ind_rows[ind_rows["president"] == president]
                 if not p_row.empty:
                     val = p_row.iloc[0]["avg_value"]
-                    lines.append(f"{president} | {row['name']} ({row['unit']}): {val}")
+                    lines.append(f"  {president} | {ind_name} ({ind_unit}): {val:.2f}")
     return "\n".join(lines)
+
 
 def ask_gemini(question: str, data_context: str, history: list) -> str:
     model = get_gemini()
     system = f"""You are an expert analyst of Kenya's economic and social history.
-You answer questions about presidential performance using ONLY the data provided below.
-Be specific, cite numbers, and be balanced and factual.
+Answer questions about presidential performance using ONLY the data provided.
+Be specific, cite numbers, and remain balanced and factual.
 Always mention which president did better or worse on specific metrics.
 If asked something not in the data, say so clearly.
 
@@ -192,311 +230,57 @@ DATA (World Bank indicators, tenure averages):
 {data_context}
 
 Presidents and tenures:
-- Moi: 1998–2002 (last years of his presidency shown)
+- Moi: 1998–2002 (final years of his presidency)
 - Kibaki: 2003–2013
 - Kenyatta (Uhuru): 2013–2022
 - Ruto: 2022–present (limited data)
 """
-    chat_history = []
-    for msg in history:
-        chat_history.append({"role": msg["role"], "parts": [msg["content"]]})
 
+    def normalise_role(role: str) -> str:
+        r = role.lower()
+        if r == "user":     return "USER"
+        if r in {"assistant", "model"}: return "MODEL"
+        if r == "system":   return "SYSTEM"
+        return r.upper()
+
+    chat_history = [
+        {"role": normalise_role(m.get("role", "user")), "parts": [m.get("content", "")]}
+        for m in history
+    ]
     chat = model.start_chat(history=chat_history)
-    response = chat.send_message(
-        f"System context:\n{system}\n\nUser question: {question}"
-    )
+    response = chat.send_message(f"{system}\n\nUser question: {question}")
     return response.text
 
-# ==================== ENHANCED INTERACTIVE COMPONENTS ====================
 
-def render_pillar_health_meters(df_pillar_scores, selected_presidents):
-    """Render actual pillar scores for selected presidents."""
-    st.subheader("🏛️ Pillar Scores by President")
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
-    if df_pillar_scores.empty:
-        st.warning("No pillar scores available.")
-        return
-
-    selected_scores = df_pillar_scores[df_pillar_scores["president"].isin(selected_presidents)]
-    if selected_scores.empty:
-        st.warning("No pillar scores found for the selected presidents.")
-        return
-
-    st.markdown("#### Actual pillar scores (0–100)")
-
-    pivot_df = (
-        selected_scores
-        .pivot(index="pillar", columns="president", values="score")
-        .reindex(PILLARS)
-    )
-
-    st.dataframe(pivot_df.round(1).fillna("N/A"))
-
-    fig = px.bar(
-        selected_scores,
-        x="pillar",
-        y="score",
-        color="president",
-        barmode="group",
-        category_orders={"pillar": PILLARS},
-        labels={"score": "Score", "pillar": "Pillar"},
-    )
-    fig.update_layout(
-        height=360,
-        legend_title="President",
-        xaxis_title="Pillar",
-        yaxis_title="Score (0–100)",
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-def render_president_selector(df_avg):
-    """Interactive president toggle cards"""
-    st.subheader("👤 Select Presidents to Compare")
-
-    # Initialize session state for selections
-    if "selected_presidents" not in st.session_state:
-        st.session_state.selected_presidents = ["Moi", "Kibaki", "Kenyatta", "Ruto"]
-
-    cols = st.columns(4)
-
-    for idx, (president, col) in enumerate(zip(["Moi", "Kibaki", "Kenyatta", "Ruto"], cols)):
-        with col:
-            # Get metrics for card
-            p_data = df_avg[df_avg["president"] == president] if not df_avg.empty else pd.DataFrame()
-            gdp_row = p_data[p_data["indicator"] == "NY.GDP.MKTP.KD.ZG"]
-            avg_gdp = f"{gdp_row.iloc[0]['avg_value']:.1f}%" if not gdp_row.empty else "N/A"
-
-            is_selected = president in st.session_state.selected_presidents
-
-            # Create card with checkbox
-            card_color = COLORS[president]
-            opacity = "1.0" if is_selected else "0.4"
-            border = f"3px solid {card_color}" if is_selected else "1px solid transparent"
-
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, {card_color}20, {card_color}40);
-                border: {border};
-                border-radius: 12px;
-                padding: 20px;
-                text-align: center;
-                opacity: {opacity};
-                transition: all 0.3s;
-            ">
-                <h3 style="color: {card_color}; margin: 0;">{president}</h3>
-                <p style="font-size: 11px; color: #666; margin: 5px 0;">
-                    {PRESIDENTIAL_ERAS[president][0]}-{PRESIDENTIAL_ERAS[president][1]}
-                </p>
-                <div style="font-size: 28px; font-weight: bold; color: #333; margin: 10px 0;">
-                    {avg_gdp}
-                </div>
-                <div style="font-size: 10px; color: #888;">Avg GDP Growth</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Toggle button
-            btn_label = "✓ Selected" if is_selected else "☐ Select"
-            if st.button(btn_label, key=f"toggle_{president}", use_container_width=True):
-                if is_selected:
-                    st.session_state.selected_presidents.remove(president)
-                else:
-                    st.session_state.selected_presidents.append(president)
-                st.rerun()
-
-    return st.session_state.selected_presidents
-
-def render_timeline_with_eras(df_ts, selected_presidents):
-    """Interactive timeline with presidential era shading"""
-    st.subheader("📈 Economic Timeline")
-
-    # Indicator selector for timeline
-    timeline_indicator = st.selectbox(
-        "Select indicator to visualize:",
-        ["Real GDP growth (%)", "Inflation (%)", "Public debt (% GDP)", "Unemployment (%)"],
-        key="timeline_indicator"
-    )
-
-    indicator_code = KEY_INDICATORS[timeline_indicator]
-
-    # Filter data
-    if not df_ts.empty:
-        filtered = df_ts[
-            (df_ts["indicator"] == indicator_code) &
-            (df_ts["president"].isin(selected_presidents))
-        ].sort_values("year")
-
-        if not filtered.empty:
-            fig = px.line(
-                filtered,
-                x="year", 
-                y="value",
-                color="president",
-                color_discrete_map=COLORS,
-                markers=True,
-                labels={"value": timeline_indicator, "year": "Year"},
-                hover_data={"year": True, "value": ":.2f", "president": True}
-            )
-
-            # Add presidential era backgrounds
-            for president, (start, end) in PRESIDENTIAL_ERAS.items():
-                if president in selected_presidents:
-                    fig.add_vrect(
-                        x0=start, x1=end,
-                        fillcolor=COLORS[president], 
-                        opacity=0.1,
-                        layer="below",
-                        line_width=0,
-                    )
-                    # Add era label at top
-                    fig.add_annotation(
-                        x=(start + end) / 2,
-                        y=filtered["value"].max() * 1.1,
-                        text=president,
-                        showarrow=False,
-                        font=dict(size=10, color=COLORS[president]),
-                        bgcolor="white",
-                        opacity=0.8
-                    )
-
-            fig.update_layout(
-                height=400,
-                hovermode="x unified",
-                legend_title="President",
-                xaxis_rangeslider_visible=True  # Allow zooming
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Add insight generation
-            if st.button("🤖 Generate AI Insight for This Chart", key="gen_insight"):
-                with st.spinner("Analyzing trends..."):
-                    # Simple trend analysis
-                    latest_president = filtered.iloc[-1]["president"] if not filtered.empty else "Unknown"
-                    latest_value = filtered.iloc[-1]["value"] if not filtered.empty else 0
-
-                    st.info(f"**Quick Insight:** {timeline_indicator} shows notable patterns across presidential eras. The most recent data under {latest_president} shows {latest_value:.2f}.")
-        else:
-            st.warning("No data available for selected presidents and indicator.")
-
-def render_quick_comparison(df_avg, selected_presidents):
-    """Quick head-to-head comparison"""
-    st.subheader("⚡ Quick Comparison")
-
-    if len(selected_presidents) >= 2:
-        # Let user pick comparison metric
-        compare_metric = st.selectbox(
-            "Compare by:",
-            ["Real GDP growth (%)", "Inflation (%)", "Public debt (% GDP)", "Unemployment (%)"],
-            key="compare_metric"
-        )
-
-        indicator_code = KEY_INDICATORS[compare_metric]
-
-        # Get data for selected presidents
-        compare_data = []
-        for president in selected_presidents:
-            p_data = df_avg[df_avg["president"] == president]
-            row = p_data[p_data["indicator"] == indicator_code]
-            if not row.empty:
-                compare_data.append({
-                    "President": president,
-                    "Value": row.iloc[0]["avg_value"],
-                    "Color": COLORS[president]
-                })
-
-        if compare_data:
-            compare_df = pd.DataFrame(compare_data)
-
-            # Create comparison bar chart
-            fig = px.bar(
-                compare_df,
-                x="President",
-                y="Value",
-                color="President",
-                color_discrete_map=COLORS,
-                text="Value",
-                labels={"Value": compare_metric}
-            )
-            fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-            fig.update_layout(height=300, showlegend=False)
-
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Winner highlight
-            best_idx = compare_df["Value"].idxmax()
-            winner = compare_df.iloc[best_idx]["President"]
-            best_value = compare_df.iloc[best_idx]["Value"]
-
-            st.success(f"🏆 **{winner}** leads in {compare_metric} with **{best_value:.2f}**")
-    else:
-        st.info("Select at least 2 presidents in the cards above to see comparison.")
-
-def render_ai_insights_panel(df_avg, df_meta):
-    """AI-powered insights panel"""
-    st.subheader("🤖 AI-Generated Insights")
-
-    # Pre-computed insights based on data patterns
-    insights = [
-        {
-            "title": "GDP Growth Leader",
-            "insight": "Kibaki era (2003-2013) showed strongest average GDP growth at 4.5%, nearly double Moi's final years.",
-            "metric": "+2.1% vs previous era",
-            "positive": True
-        },
-        {
-            "title": "Debt Concern",
-            "insight": "Public debt has accelerated significantly post-2013, reaching 68% of GDP under current administration.",
-            "metric": "+35 percentage points",
-            "positive": False
-        },
-        {
-            "title": "Infrastructure Progress",
-            "insight": "Access to electricity improved dramatically from 15% (1998) to 75% (2022).",
-            "metric": "+60 percentage points",
-            "positive": True
-        }
-    ]
-
-    # Display insights in expandable sections
-    for insight in insights:
-        with st.expander(f"{insight['title']}"):
-            arrow = "📈" if insight['positive'] else "📉"
-            color = "green" if insight['positive'] else "red"
-
-            st.markdown(f"""
-            <div style="border-left: 4px solid {color}; padding-left: 10px;">
-                <p>{arrow} <strong>{insight['insight']}</strong></p>
-                <p style="font-size: 12px; color: #666;">Key metric: {insight['metric']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # Ask custom question
-    st.divider()
-    st.write("**Ask your own question:**")
-    user_question = st.text_input("What would you like to know about Kenya's economic performance?", 
-                                   placeholder="e.g., Which president had the best inflation control?")
-
-    if user_question:
-        with st.spinner("Consulting AI analyst..."):
-            # Simulate AI response (replace with actual Gemini call if available)
-            st.info(f"Based on historical data: {user_question}\n\nThis would connect to your Gemini chatbot for detailed analysis.")
-
-# ==================== ORIGINAL PAGES (Keep as-is) ====================
-
-def render_sidebar():
+def render_sidebar() -> tuple:
+    """
+    FIX 5: Sidebar multiselect writes directly to st.session_state["selected_presidents"].
+    Returns (selected_presidents, selected_pillars, year_range, page).
+    """
     with st.sidebar:
         st.title("🇰🇪 Kenya Dashboard")
         st.caption("Presidential performance 1998–2024")
         st.divider()
 
-        # Use session state for selections if available
-        default_presidents = st.session_state.get("selected_presidents", ["Moi", "Kibaki", "Kenyatta", "Ruto"])
+        # Keep sidebar selection in sync with session state
+        current = st.session_state.get("selected_presidents", PRESIDENT_ORDER)
 
-        selected_presidents = st.multiselect(
+        new_selection = st.multiselect(
             "Presidents",
-            options=["Moi", "Kibaki", "Kenyatta", "Ruto"],
-            default=default_presidents,
+            options=PRESIDENT_ORDER,
+            default=current,
+            key="sidebar_presidents",
         )
+
+        # Enforce minimum 1 selection
+        if len(new_selection) == 0:
+            st.warning("Select at least one president.")
+            new_selection = current
+
+        # Write back to shared session state
+        st.session_state["selected_presidents"] = new_selection
 
         selected_pillars = st.multiselect(
             "Pillars",
@@ -515,11 +299,411 @@ def render_sidebar():
         st.divider()
         st.caption("Data: World Bank Open Data\nBuilt with Streamlit + Supabase")
 
-    return selected_presidents, selected_pillars, year_range, page
+    return new_selection, selected_pillars, year_range, page
 
-def render_timeseries(df_ts: pd.DataFrame, df_meta: pd.DataFrame,
-                      presidents: list, pillars: list, year_range: tuple):
-    """Original Time Series page - unchanged"""
+
+# ── Overview: pillar health meters ────────────────────────────────────────────
+
+def render_pillar_health_meters(df_pillar: pd.DataFrame, selected_presidents: list):
+    st.subheader("🏛️ Pillar Scores by President")
+
+    if df_pillar.empty:
+        st.warning("No pillar scores available.")
+        return
+
+    df_sel = df_pillar[df_pillar["president"].isin(selected_presidents)]
+    if df_sel.empty:
+        st.warning("No pillar scores for the selected presidents.")
+        return
+
+    pivot = (
+        df_sel
+        .pivot(index="pillar", columns="president", values="score")
+        .reindex(PILLARS)
+    )
+    st.dataframe(pivot.round(1).fillna("N/A"), use_container_width=True)
+
+    fig = px.bar(
+        df_sel,
+        x="pillar",
+        y="score",
+        color="president",
+        color_discrete_map=COLORS,
+        barmode="group",
+        category_orders={"pillar": PILLARS, "president": PRESIDENT_ORDER},
+        labels={"score": "Score (0–100)", "pillar": "Pillar"},
+    )
+    fig.update_layout(height=360, legend_title="President",
+                      xaxis_title="Pillar", yaxis_title="Score (0–100)")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ── Overview: president selector cards ────────────────────────────────────────
+
+def render_president_selector(df_avg: pd.DataFrame) -> list:
+    """
+    FIX 5 + FIX 7 + FIX 12:
+    - Reads/writes a single shared session state key.
+    - Buttons labeled "Remove" / "+ Compare".
+    - Minimum 1 president enforced with user feedback.
+    - Card colors use rgba() — safe in dark mode.
+    - Text colors use CSS variables via st.markdown inline style.
+    """
+    st.subheader("👤 Select Presidents to Compare")
+    cols = st.columns(4)
+
+    current = st.session_state.get("selected_presidents", list(PRESIDENT_ORDER))
+
+    for president, col in zip(PRESIDENT_ORDER, cols):
+        with col:
+            r, g, b = COLORS_RGBA[president]
+            is_selected = president in current
+
+            p_data  = df_avg[df_avg["president"] == president] if not df_avg.empty else pd.DataFrame()
+            gdp_row = p_data[p_data["indicator"] == "NY.GDP.MKTP.KD.ZG"]
+            avg_gdp = f"{gdp_row.iloc[0]['avg_value']:.1f}%" if not gdp_row.empty else "N/A"
+
+            border_width = "2px" if is_selected else "0.5px"
+            bg_opacity   = "0.15" if is_selected else "0.05"
+            hex_color    = COLORS[president]
+
+            # FIX 12: rgba background, no hardcoded text colors
+            st.markdown(f"""
+            <div style="
+                background: rgba({r},{g},{b},{bg_opacity});
+                border: {border_width} solid {hex_color};
+                border-radius: 12px;
+                padding: 18px;
+                text-align: center;
+                margin-bottom: 8px;
+            ">
+                <div style="font-size:16px; font-weight:500; color:{hex_color};">{president}</div>
+                <div style="font-size:11px; color:var(--text-color, #888); margin:4px 0 8px;">
+                    {PRESIDENTIAL_ERAS[president][0]}–{PRESIDENTIAL_ERAS[president][1]}
+                </div>
+                <div style="font-size:26px; font-weight:500; color:var(--text-color, inherit);">
+                    {avg_gdp}
+                </div>
+                <div style="font-size:10px; color:var(--text-color, #888);">Avg GDP Growth</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # FIX 7: clear action labels
+            if is_selected:
+                btn_label = "Remove"
+                btn_type  = "secondary"
+            else:
+                btn_label = "+ Compare"
+                btn_type  = "primary"
+
+            if st.button(btn_label, key=f"toggle_{president}",
+                         use_container_width=True, type=btn_type):
+                if is_selected:
+                    # FIX 7: enforce minimum 1 selection
+                    if len(current) <= 1:
+                        st.toast("At least one president must stay selected.", icon="⚠️")
+                    else:
+                        new_list = [p for p in current if p != president]
+                        st.session_state["selected_presidents"] = new_list
+                        st.rerun()
+                else:
+                    st.session_state["selected_presidents"] = current + [president]
+                    st.rerun()
+
+    return st.session_state["selected_presidents"]
+
+
+# ── Overview: timeline ────────────────────────────────────────────────────────
+
+def render_timeline_with_eras(df_ts: pd.DataFrame, selected_presidents: list):
+    """
+    FIX 3: era annotation uses yref="paper" so negative data values don't break it.
+    FIX 10: era shading is clipped to the actual data range for the chosen indicator.
+    """
+    st.subheader("📈 Economic Timeline")
+
+    timeline_indicator = st.selectbox(
+        "Select indicator to visualize:",
+        list(KEY_INDICATORS.keys()),
+        key="timeline_indicator",
+    )
+    indicator_code = KEY_INDICATORS[timeline_indicator]
+
+    if df_ts.empty:
+        st.info("No time-series data available.")
+        return
+
+    filtered = df_ts[
+        (df_ts["indicator"] == indicator_code) &
+        (df_ts["president"].isin(selected_presidents))
+    ].sort_values("year")
+
+    if filtered.empty:
+        st.warning("No data for selected presidents and indicator.")
+        return
+
+    fig = px.line(
+        filtered,
+        x="year",
+        y="value",
+        color="president",
+        color_discrete_map=COLORS,
+        markers=True,
+        labels={"value": timeline_indicator, "year": "Year"},
+        hover_data={"year": True, "value": ":.2f", "president": True},
+        category_orders={"president": PRESIDENT_ORDER},
+    )
+
+    data_min_year = int(filtered["year"].min())
+    data_max_year = int(filtered["year"].max())
+
+    for president, (era_start, era_end) in PRESIDENTIAL_ERAS.items():
+        if president not in selected_presidents:
+            continue
+
+        # FIX 10: clip shading to actual data years
+        clipped_start = max(era_start, data_min_year)
+        clipped_end   = min(era_end, data_max_year)
+
+        if clipped_start >= clipped_end:
+            continue
+
+        fig.add_vrect(
+            x0=clipped_start, x1=clipped_end,
+            fillcolor=COLORS[president],
+            opacity=0.08,
+            layer="below",
+            line_width=0,
+        )
+
+        # FIX 3: use paper coordinates (0–1) so annotations never depend on data values
+        fig.add_annotation(
+            x=(clipped_start + clipped_end) / 2,
+            y=1.05,
+            yref="paper",
+            text=president,
+            showarrow=False,
+            font=dict(size=10, color=COLORS[president]),
+            bgcolor="rgba(255,255,255,0.75)",
+        )
+
+    fig.update_layout(
+        height=420,
+        hovermode="x unified",
+        legend_title="President",
+        xaxis_rangeslider_visible=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    if st.button("🤖 Generate AI Insight for This Chart", key="gen_insight"):
+        with st.spinner("Analysing trends…"):
+            data   = get_data()
+            ctx    = build_data_context(data["avg"], data["meta"])
+            prompt = (
+                f"Summarise the trend in '{timeline_indicator}' across the selected "
+                f"presidential eras ({', '.join(selected_presidents)}). "
+                "Cite the key turning points and which president performed best and worst."
+            )
+            try:
+                insight = ask_gemini(prompt, ctx, [])
+                st.info(insight)
+            except Exception as e:
+                st.error(f"Could not generate insight: {e}")
+
+
+# ── Overview: quick comparison ────────────────────────────────────────────────
+
+def render_quick_comparison(df_avg: pd.DataFrame, selected_presidents: list):
+    """FIX 2: use idxmin() for lower-is-better indicators and adjust trophy text."""
+    st.subheader("⚡ Quick Comparison")
+
+    if len(selected_presidents) < 2:
+        st.info("Select at least 2 presidents above to see a head-to-head comparison.")
+        return
+
+    compare_metric = st.selectbox(
+        "Compare by:",
+        list(KEY_INDICATORS.keys()),
+        key="compare_metric",
+    )
+    indicator_code = KEY_INDICATORS[compare_metric]
+
+    compare_data = []
+    for president in selected_presidents:
+        row = df_avg[(df_avg["president"] == president) &
+                     (df_avg["indicator"] == indicator_code)]
+        if not row.empty:
+            compare_data.append({
+                "President": president,
+                "Value":     round(row.iloc[0]["avg_value"], 2),
+            })
+
+    if not compare_data:
+        st.warning("No comparison data available for the selected metric.")
+        return
+
+    compare_df = pd.DataFrame(compare_data)
+
+    fig = px.bar(
+        compare_df,
+        x="President",
+        y="Value",
+        color="President",
+        color_discrete_map=COLORS,
+        text="Value",
+        labels={"Value": compare_metric},
+        category_orders={"President": PRESIDENT_ORDER},
+    )
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig.update_layout(height=320, showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # FIX 2: pick winner correctly based on indicator direction
+    lower_is_better = compare_metric in LOWER_IS_BETTER_LABELS
+    if lower_is_better:
+        best_idx = compare_df["Value"].idxmin()
+        direction_word = "lowest"
+    else:
+        best_idx = compare_df["Value"].idxmax()
+        direction_word = "highest"
+
+    winner = compare_df.iloc[best_idx]["President"]
+    best_value = compare_df.iloc[best_idx]["Value"]
+    st.success(
+        f"🏆 **{winner}** leads with the {direction_word} {compare_metric}: **{best_value:.2f}**"
+    )
+
+
+# ── Overview: AI insights panel ───────────────────────────────────────────────
+
+def render_ai_insights_panel(df_avg: pd.DataFrame, df_meta: pd.DataFrame):
+    """
+    FIX 4: custom question calls ask_gemini() for real.
+    FIX 8: insight numbers computed from df_avg, not hardcoded strings.
+    """
+    st.subheader("🤖 AI-Generated Insights")
+
+    # ── FIX 8: compute insight values dynamically ──────────────────────────────
+    insights = []
+
+    # Insight 1: GDP growth leader
+    gdp_code = "NY.GDP.MKTP.KD.ZG"
+    gdp_rows = df_avg[df_avg["indicator"] == gdp_code]
+    if not gdp_rows.empty:
+        best_gdp = gdp_rows.loc[gdp_rows["avg_value"].idxmax()]
+        worst_gdp = gdp_rows.loc[gdp_rows["avg_value"].idxmin()]
+        insights.append({
+            "title":    "GDP Growth Leader",
+            "insight":  (
+                f"{best_gdp['president']} had the highest average GDP growth at "
+                f"{best_gdp['avg_value']:.1f}%, compared to {worst_gdp['president']}'s "
+                f"{worst_gdp['avg_value']:.1f}%."
+            ),
+            "metric":   f"+{best_gdp['avg_value'] - worst_gdp['avg_value']:.1f} pp vs lowest era",
+            "positive": True,
+        })
+
+    # Insight 2: Public debt trajectory
+    debt_code = "GC.DOD.TOTL.GD.ZS"
+    debt_rows = df_avg[df_avg["indicator"] == debt_code]
+    if not debt_rows.empty:
+        max_debt = debt_rows.loc[debt_rows["avg_value"].idxmax()]
+        min_debt = debt_rows.loc[debt_rows["avg_value"].idxmin()]
+        swing    = max_debt["avg_value"] - min_debt["avg_value"]
+        insights.append({
+            "title":    "Public Debt Concern",
+            "insight":  (
+                f"Public debt peaked under {max_debt['president']} at "
+                f"{max_debt['avg_value']:.0f}% of GDP, versus a low of "
+                f"{min_debt['avg_value']:.0f}% under {min_debt['president']}."
+            ),
+            "metric":   f"+{swing:.0f} percentage points peak-to-trough",
+            "positive": False,
+        })
+
+    # Insight 3: Electricity access
+    elec_code = "EG.ELC.ACCS.ZS"
+    elec_rows = df_avg[df_avg["indicator"] == elec_code].sort_values("avg_value")
+    if len(elec_rows) >= 2:
+        earliest = elec_rows.iloc[0]
+        latest   = elec_rows.iloc[-1]
+        gain     = latest["avg_value"] - earliest["avg_value"]
+        insights.append({
+            "title":    "Infrastructure Progress",
+            "insight":  (
+                f"Access to electricity improved from {earliest['avg_value']:.0f}% "
+                f"(under {earliest['president']}) to {latest['avg_value']:.0f}% "
+                f"(under {latest['president']})."
+            ),
+            "metric":   f"+{gain:.0f} percentage points",
+            "positive": True,
+        })
+
+    for item in insights:
+        with st.expander(item["title"]):
+            color  = "green" if item["positive"] else "red"
+            arrow  = "📈"    if item["positive"] else "📉"
+            st.markdown(f"""
+            <div style="border-left: 4px solid {color}; padding-left: 12px;">
+                <p>{arrow} {item['insight']}</p>
+                <p style="font-size:12px; color:var(--text-color,#666);">Key metric: {item['metric']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # FIX 4: wire up the real Gemini call
+    st.write("**Ask your own question about Kenya's presidential performance:**")
+    user_question = st.text_input(
+        "",
+        placeholder="e.g. Which president had the best inflation control?",
+        key="ai_panel_question",
+    )
+
+    if st.button("Ask", key="ai_panel_ask") and user_question.strip():
+        with st.spinner("Consulting AI analyst…"):
+            ctx = build_data_context(df_avg, df_meta)
+            try:
+                answer = ask_gemini(user_question.strip(), ctx, [])
+                st.info(answer)
+            except Exception as e:
+                st.error(f"Gemini error: {e}. Check your GEMINI_API_KEY.")
+
+
+# ── Overview (full page) ───────────────────────────────────────────────────────
+
+def render_overview(df_avg, df_ts, df_pillar, df_meta):
+    """
+    FIX 1: selector runs first so meters and charts always reflect the current choice.
+    """
+    st.title("🇰🇪 Kenya Presidential Economic Dashboard")
+    st.markdown("Explore Kenya's economic performance across four presidential eras (1998–2024).")
+    st.divider()
+
+    # FIX 1: selector FIRST — everything below reads from session state
+    selected = render_president_selector(df_avg)
+
+    st.divider()
+
+    render_pillar_health_meters(df_pillar, selected)
+
+    st.divider()
+
+    render_timeline_with_eras(df_ts, selected)
+
+    st.divider()
+
+    render_quick_comparison(df_avg, selected)
+
+    st.divider()
+
+    render_ai_insights_panel(df_avg, df_meta)
+
+
+# ── Time Series page ───────────────────────────────────────────────────────────
+
+def render_timeseries(df_ts, df_meta, presidents, pillars, year_range):
+    """Original Time Series page — era shading fix (FIX 10) also applied here."""
     st.header("Time Series Explorer")
 
     pillar_sel = st.selectbox("Pillar", pillars, key="ts_pillar")
@@ -540,7 +724,7 @@ def render_timeseries(df_ts: pd.DataFrame, df_meta: pd.DataFrame,
     ].sort_values("year")
 
     if filtered.empty:
-        st.info("No data for selected filters.")
+        st.info("No data for the selected filters.")
         return
 
     fig = px.line(
@@ -550,14 +734,31 @@ def render_timeseries(df_ts: pd.DataFrame, df_meta: pd.DataFrame,
         color_discrete_map=COLORS,
         markers=True,
         labels={"value": f"{indicator_sel} ({unit})", "year": "Year"},
+        category_orders={"president": PRESIDENT_ORDER},
     )
 
-    eras = {"Moi": (1998,2002), "Kibaki": (2003,2013), "Kenyatta": (2013,2022), "Ruto": (2022,2024)}
-    for p, (s, e) in eras.items():
-        if p in presidents:
-            fig.add_vrect(x0=s, x1=e, fillcolor=COLORS[p], opacity=0.07, layer="below", line_width=0)
-            fig.add_annotation(x=(s+e)/2, y=0.97, yref="paper", text=p, showarrow=False,
-                               font=dict(size=10, color=COLORS[p]))
+    data_min = int(filtered["year"].min())
+    data_max = int(filtered["year"].max())
+
+    for p, (s, e) in PRESIDENTIAL_ERAS.items():
+        if p not in presidents:
+            continue
+        cs = max(s, data_min)
+        ce = min(e, data_max)
+        if cs >= ce:
+            continue
+        fig.add_vrect(x0=cs, x1=ce, fillcolor=COLORS[p],
+                      opacity=0.07, layer="below", line_width=0)
+        # FIX 3: paper-coordinate annotation
+        fig.add_annotation(
+            x=(cs + ce) / 2,
+            y=1.04,
+            yref="paper",
+            text=p,
+            showarrow=False,
+            font=dict(size=10, color=COLORS[p]),
+            bgcolor="rgba(255,255,255,0.75)",
+        )
 
     fig.update_layout(height=480, legend_title="President")
     st.plotly_chart(fig, use_container_width=True)
@@ -570,21 +771,28 @@ def render_timeseries(df_ts: pd.DataFrame, df_meta: pd.DataFrame,
             use_container_width=True,
         )
 
-def render_scorecard(df_score: pd.DataFrame, df_avg: pd.DataFrame,
-                     presidents: list, pillars: list):
-    """Original Scorecard page - unchanged"""
+
+# ── Scorecard page ────────────────────────────────────────────────────────────
+
+def render_scorecard(df_score, df_avg, presidents, pillars):
+    """
+    FIX 9: bar chart uses dynamic x-axis range and a midpoint reference line.
+    """
     st.header("Presidential Scorecard")
-    st.caption("Scores are normalised 0–100 within each indicator. For negative indicators (inflation, debt etc.) the score is inverted so higher always means better.")
+    st.caption(
+        "Scores are normalised 0–100 within each indicator. "
+        "For negative indicators (inflation, debt, etc.) the score is inverted "
+        "so higher always means better."
+    )
 
     if df_score.empty:
         st.warning("Scorecard data not available. Check the Supabase view.")
         return
 
     df_score = df_score.copy()
-    df_score.loc[df_score["indicator"].isin(INVERT_FOR_SCORE), "score_raw"] = (
-        100 - pd.to_numeric(df_score.loc[df_score["indicator"].isin(INVERT_FOR_SCORE), "score_raw"], errors="coerce")
-    )
-
+    df_score["score_raw"] = pd.to_numeric(df_score["score_raw"], errors="coerce")
+    mask = df_score["indicator"].isin(INVERT_FOR_SCORE)
+    df_score.loc[mask, "score_raw"] = 100 - df_score.loc[mask, "score_raw"]
     df_score = df_score[df_score["president"].isin(presidents)]
 
     pillar_scores = (
@@ -595,13 +803,17 @@ def render_scorecard(df_score: pd.DataFrame, df_avg: pd.DataFrame,
         .rename(columns={"score_raw": "score"})
     )
 
+    # Radar chart
     st.subheader("Pillar radar")
-    fig = go.Figure()
+    fig_radar = go.Figure()
     for president in presidents:
         p_data = pillar_scores[pillar_scores["president"] == president]
-        scores  = [p_data[p_data["pillar"] == pl]["score"].values[0]
-                   if pl in p_data["pillar"].values else 0 for pl in pillars]
-        fig.add_trace(go.Scatterpolar(
+        scores = [
+            float(p_data[p_data["pillar"] == pl]["score"].values[0])
+            if pl in p_data["pillar"].values else 0.0
+            for pl in pillars
+        ]
+        fig_radar.add_trace(go.Scatterpolar(
             r=scores + [scores[0]],
             theta=pillars + [pillars[0]],
             name=president,
@@ -609,12 +821,13 @@ def render_scorecard(df_score: pd.DataFrame, df_avg: pd.DataFrame,
             fill="toself",
             opacity=0.4,
         ))
-    fig.update_layout(
+    fig_radar.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
         height=500,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_radar, use_container_width=True)
 
+    # FIX 9: overall ranking bar chart
     st.subheader("Overall ranking")
     overall = (
         df_score[df_score["pillar"].isin(pillars)]
@@ -625,7 +838,11 @@ def render_scorecard(df_score: pd.DataFrame, df_avg: pd.DataFrame,
         .sort_values("overall_score", ascending=False)
     )
     overall = overall[overall["president"].isin(presidents)]
-    fig2 = px.bar(
+
+    min_score = overall["overall_score"].min()
+    x_min     = max(0, min_score - 10)  # don't go below 0
+
+    fig_bar = px.bar(
         overall,
         x="overall_score", y="president",
         orientation="h",
@@ -633,15 +850,35 @@ def render_scorecard(df_score: pd.DataFrame, df_avg: pd.DataFrame,
         color_discrete_map=COLORS,
         text="overall_score",
         labels={"overall_score": "Score (0–100)", "president": ""},
+        category_orders={"president": PRESIDENT_ORDER},
     )
-    fig2.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-    fig2.update_layout(showlegend=False, height=300, xaxis_range=[0, 105])
-    st.plotly_chart(fig2, use_container_width=True)
+    fig_bar.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig_bar.update_layout(
+        showlegend=False,
+        height=300,
+        xaxis_range=[x_min, 105],
+    )
+    # FIX 9: midpoint reference line
+    fig_bar.add_vline(
+        x=50,
+        line_dash="dot",
+        line_color="gray",
+        opacity=0.4,
+        annotation_text="50",
+        annotation_position="top",
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-def render_chatbot(df_avg: pd.DataFrame, df_meta: pd.DataFrame):
-    """Original Chatbot page - unchanged"""
+
+# ── AI Chatbot page ────────────────────────────────────────────────────────────
+
+def render_chatbot(df_avg, df_meta):
+    """
+    FIX 11: starter question buttons handle the question directly in their own
+    block — no pending_question session-state hack and no double-render.
+    """
     st.header("AI Analyst — Ask about presidential performance")
-    st.caption("Powered by Gemini. Answers are grounded in World Bank data loaded into this dashboard.")
+    st.caption("Powered by Gemini. Answers are grounded in World Bank data.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -655,11 +892,25 @@ def render_chatbot(df_avg: pd.DataFrame, df_meta: pd.DataFrame):
         "Who performed best on poverty reduction?",
         "Compare Kibaki and Kenyatta overall.",
     ]
+
     st.write("**Try asking:**")
     cols = st.columns(len(starters))
-    for col, q in zip(cols, starters):
-        if col.button(q, use_container_width=True):
-            st.session_state.pending_question = q
+
+    # FIX 11: handle question directly inside each button block
+    for col, question in zip(cols, starters):
+        if col.button(question, use_container_width=True):
+            st.session_state.chat_history.append({"role": "user", "content": question})
+            with st.spinner("Analysing data…"):
+                try:
+                    answer = ask_gemini(
+                        question,
+                        data_context,
+                        st.session_state.chat_history[:-1],
+                    )
+                except Exception as e:
+                    answer = f"Error calling Gemini API: {e}"
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+            st.rerun()
 
     st.divider()
 
@@ -667,24 +918,17 @@ def render_chatbot(df_avg: pd.DataFrame, df_meta: pd.DataFrame):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("Ask about any president or indicator...")
-
-    question = None
-    if "pending_question" in st.session_state:
-        question = st.session_state.pop("pending_question")
-    elif user_input:
-        question = user_input
-
-    if question:
-        st.session_state.chat_history.append({"role": "user", "content": question})
+    user_input = st.chat_input("Ask about any president or indicator…")
+    if user_input:
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(question)
+            st.markdown(user_input)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analysing data..."):
+            with st.spinner("Analysing data…"):
                 try:
                     answer = ask_gemini(
-                        question,
+                        user_input,
                         data_context,
                         st.session_state.chat_history[:-1],
                     )
@@ -698,71 +942,43 @@ def render_chatbot(df_avg: pd.DataFrame, df_meta: pd.DataFrame):
             st.session_state.chat_history = []
             st.rerun()
 
-# ==================== ENHANCED OVERVIEW PAGE ====================
 
-def render_enhanced_overview(df_avg, df_ts, df_pillar_scores, df_meta):
-    """New highly interactive Overview page"""
-    st.title("🇰🇪 Kenya Presidential Economic Dashboard")
-    st.markdown("Explore Kenya's economic performance across four presidential eras (1998-2024)")
-
-    st.divider()
-
-    # 1. PILLAR HEALTH METERS (Interactive)
-    render_pillar_health_meters(df_pillar_scores, st.session_state.get("selected_presidents", ["Moi", "Kibaki", "Kenyatta", "Ruto"]))
-
-    st.divider()
-
-    # 2. PRESIDENT SELECTOR (Interactive toggle cards)
-    selected_presidents = render_president_selector(df_avg)
-
-    # Update session state
-    st.session_state.selected_presidents = selected_presidents
-
-    st.divider()
-
-    # 3. TIMELINE WITH ERAS
-    render_timeline_with_eras(df_ts, selected_presidents)
-
-    st.divider()
-
-    # 4. QUICK COMPARISON
-    render_quick_comparison(df_avg, selected_presidents)
-
-    st.divider()
-
-    # 5. AI INSIGHTS PANEL
-    render_ai_insights_panel(df_avg, df_meta)
-
-# ==================== MAIN ====================
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    presidents, pillars, year_range, page = render_sidebar()
+    st.set_page_config(
+        page_title="Kenya Presidential Dashboard",
+        page_icon="🇰🇪",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
-    # Load data
-    with st.spinner("Loading data from Supabase..."):
-        df_ts    = load_timeseries()
-        df_avg   = load_averages()
-        df_meta  = load_meta()
-        df_score = load_scorecard()
-        df_pillar_scores = load_pillar_scores()
+    # FIX 5: initialise shared president state before any render
+    init_president_state()
 
-        if df_avg.empty or df_meta.empty:
-            st.error("Data not found. Run the ETL script first and ensure the Supabase tables/views exist.")
-            st.stop()
+    # FIX 6: load all data once; subsequent calls read from session state
+    ensure_data_loaded()
+    data = get_data()
 
-    if page in ["Overview", "Time Series"] and df_ts.empty:
-        st.error("No timeseries data found. Run the ETL script first and ensure the timeseries table exists.")
+    # FIX 6: timeseries check done once, cleanly
+    if data["ts"].empty:
+        st.error("No timeseries data found. Run the ETL script first.")
         st.stop()
 
-    # Route to page
+    presidents, pillars, year_range, page = render_sidebar()
+
     if page == "Overview":
-        render_enhanced_overview(df_avg, df_ts, df_pillar_scores, df_meta)
+        render_overview(data["avg"], data["ts"], data["pillar"], data["meta"])
+
     elif page == "Time Series":
-        render_timeseries(df_ts, df_meta, presidents, pillars, year_range)
+        render_timeseries(data["ts"], data["meta"], presidents, pillars, year_range)
+
     elif page == "Scorecard":
-        render_scorecard(df_score, df_avg, presidents, pillars)
+        render_scorecard(data["score"], data["avg"], presidents, pillars)
+
     elif page == "AI Chatbot":
-        render_chatbot(df_avg, df_meta)
+        render_chatbot(data["avg"], data["meta"])
+
 
 if __name__ == "__main__":
     main()
