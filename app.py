@@ -171,63 +171,44 @@ Presidents and tenures:
 # ==================== ENHANCED INTERACTIVE COMPONENTS ====================
 
 def render_pillar_health_meters(df_pillar_scores, selected_presidents):
-    """Render interactive pillar health meters"""
-    st.subheader("🏛️ Pillar Health Overview", help="Click on a pillar to see detailed indicators")
+    """Render actual pillar scores for selected presidents."""
+    st.subheader("🏛️ Pillar Scores by President")
 
-    # Create columns for 5 pillars
-    cols = st.columns(5)
+    if df_pillar_scores.empty:
+        st.warning("No pillar scores available.")
+        return
 
-    pillar_colors = {
-        "Growth": "#4CAF50",
-        "Stability": "#2196F3", 
-        "External Balance": "#FF9800",
-        "Inclusion": "#9C27B0",
-        "Sustainability": "#F44336"
-    }
+    selected_scores = df_pillar_scores[df_pillar_scores["president"].isin(selected_presidents)]
+    if selected_scores.empty:
+        st.warning("No pillar scores found for the selected presidents.")
+        return
 
-    for idx, (pillar, col) in enumerate(zip(PILLARS, cols)):
-        with col:
-            # Calculate average score across selected presidents
-            if not df_pillar_scores.empty:
-                scores = df_pillar_scores[
-                    (df_pillar_scores["pillar"] == pillar) & 
-                    (df_pillar_scores["president"].isin(selected_presidents))
-                ]["score"]
-                avg_score = scores.mean() if not scores.empty else 50
-            else:
-                avg_score = 50
+    st.markdown("#### Actual pillar scores (0–100)")
 
-            # Create gauge chart
-            fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=round(avg_score, 1),
-                domain={'x': [0, 1], 'y': [0, 1]},
-                title={'text': pillar, 'font': {'size': 12}},
-                gauge={
-                    'axis': {'range': [0, 100], 'tickwidth': 1},
-                    'bar': {'color': pillar_colors.get(pillar, "#888")},
-                    'bgcolor': "lightgray",
-                    'steps': [
-                        {'range': [0, 40], 'color': "#ffcccc"},
-                        {'range': [40, 70], 'color': "#ffffcc"},
-                        {'range': [70, 100], 'color': "#ccffcc"}
-                    ],
-                    'threshold': {
-                        'line': {'color': "black", 'width': 2},
-                        'thickness': 0.75,
-                        'value': avg_score
-                    }
-                }
-            ))
+    pivot_df = (
+        selected_scores
+        .pivot(index="pillar", columns="president", values="score")
+        .reindex(PILLARS)
+    )
 
-            fig.update_layout(height=200, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True, key=f"pillar_{pillar}")
+    st.dataframe(pivot_df.round(1).fillna("N/A"))
 
-            # Add drill-down button
-            if st.button(f"Explore {pillar}", key=f"btn_{pillar}", use_container_width=True):
-                st.session_state.selected_pillar = pillar
-                st.session_state.page = "Time Series"
-                st.rerun()
+    fig = px.bar(
+        selected_scores,
+        x="pillar",
+        y="score",
+        color="president",
+        barmode="group",
+        category_orders={"pillar": PILLARS},
+        labels={"score": "Score", "pillar": "Pillar"},
+    )
+    fig.update_layout(
+        height=360,
+        legend_title="President",
+        xaxis_title="Pillar",
+        yaxis_title="Score (0–100)",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 def render_president_selector(df_avg):
     """Interactive president toggle cards"""
